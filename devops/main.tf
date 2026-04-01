@@ -1,3 +1,7 @@
+provider "aws" {
+  region = "us-east-1"
+}
+
 // vpc con subred publica y privada
 
 // security groups & nat
