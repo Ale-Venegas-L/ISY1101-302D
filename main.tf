@@ -1,89 +1,113 @@
 provider "aws" {
-  region = var.region
+  region = var.region [cite: 169]
 }
 
+# Data source para obtener la AMI más reciente de Amazon Linux 2
 data "aws_ami" "amazon_linux_2" {
   most_recent = true
   owners      = ["amazon"]
 
   filter {
     name   = "name"
-    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
+    values = ["amzn2-ami-hvm-*-x86_64-gp2"] [cite: 169]
   }
 }
 
-resource "aws_instance" "front" {
-  ami                         = data.aws_ami.amazon_linux_2.id
-  instance_type               = var.instance_type
-  subnet_id                   = aws_subnet.pub.id
-  key_name                    = var.key_name
-  associate_public_ip_address = true
-  vpc_security_group_ids      = [aws_security_group.pub_sg.id]
+# --- LAUNCH TEMPLATES (Requerimiento de Automatización IE5) ---
 
-  user_data = <<-EOT
+# Template para la capa Frontend
+resource "aws_launch_template" "front_lt" {
+  name_prefix   = "front-lt-"
+  image_id      = data.aws_ami.amazon_linux_2.id
+  instance_type = var.instance_type
+  key_name      = var.key_name
+
+  iam_instance_profile {
+    name = aws_iam_instance_profile.ec2_profile.name [cite: 178]
+  }
+
+  network_interfaces {
+    associate_public_ip_address = true
+    security_groups             = [aws_security_group.pub_sg.id]
+  }
+
+  user_data = base64encode(<<-EOT
     #!/bin/bash
     yum update -y
     amazon-linux-extras install docker -y
     systemctl enable --now docker
     usermod -a -G docker ec2-user
 
-    docker pull nginx:stable
+    docker pull nginx:stable [cite: 171]
     mkdir -p /etc/nginx/conf.d
 
     cat > /etc/nginx/conf.d/backend.conf <<NGINX
     server {
       listen 80;
       location / {
-        proxy_pass http://${aws_instance.back.private_ip}:8080;
+        proxy_pass http://${aws_instance.back.private_ip}:8080; [cite: 172]
       }
     }
     NGINX
 
-    docker run -d --name nginx-proxy \
-      -p 80:80 \
-      -v /etc/nginx/conf.d:/etc/nginx/conf.d:ro \
-      nginx:stable
+    docker run -d --name nginx-proxy -p 80:80 -v /etc/nginx/conf.d:/etc/nginx/conf.d:ro nginx:stable
   EOT
-
-  tags = {
-    Name = "ec2-front"
-    Role = "front"
-  }
+  )
 }
 
-resource "aws_instance" "back" {
-  ami                    = data.aws_ami.amazon_linux_2.id
-  instance_type          = var.instance_type
-  subnet_id              = aws_subnet.priv.id
-  key_name               = var.key_name
-  vpc_security_group_ids = [aws_security_group.back_sg.id]
+# Template para la capa Backend
+resource "aws_launch_template" "back_lt" {
+  name_prefix   = "back-lt-"
+  image_id      = data.aws_ami.amazon_linux_2.id
+  instance_type = var.instance_type
+  key_name      = var.key_name
 
-  user_data = <<-EOT
+  iam_instance_profile {
+    name = aws_iam_instance_profile.ec2_profile.name [cite: 178]
+  }
+
+  network_interfaces {
+    security_groups = [aws_security_group.back_sg.id]
+  }
+
+  user_data = base64encode(<<-EOT
     #!/bin/bash
     yum update -y
     amazon-linux-extras install docker -y
     systemctl enable --now docker
     usermod -a -G docker ec2-user
 
-    docker run -d --name app \
-      -p 8080:8080 \
-      hashicorp/http-echo -text="Hello from back service"
+    docker run -d --name app -p 8080:8080 hashicorp/http-echo -text="Hello from back service" [cite: 175]
   EOT
-
-  tags = {
-    Name = "ec2-back"
-    Role = "back"
-  }
+  )
 }
 
-resource "aws_instance" "data" {
-  ami                    = data.aws_ami.amazon_linux_2.id
-  instance_type          = var.instance_type
-  subnet_id              = aws_subnet.priv.id
-  key_name               = var.key_name
-  vpc_security_group_ids = [aws_security_group.db_sg.id]
+# Template para la capa Data (Incluye Persistencia IE5)
+resource "aws_launch_template" "data_lt" {
+  name_prefix   = "data-lt-"
+  image_id      = data.aws_ami.amazon_linux_2.id
+  instance_type = var.instance_type
+  key_name      = var.key_name
 
-  user_data = <<-EOT
+  iam_instance_profile {
+    name = aws_iam_instance_profile.ec2_profile.name [cite: 178]
+  }
+
+  network_interfaces {
+    security_groups = [aws_security_group.db_sg.id]
+  }
+
+  # Configuración de bloque para persistencia de datos [cite: 88, 157]
+  block_device_mappings {
+    device_name = "/dev/sdb"
+    ebs {
+      volume_size = 10
+      volume_type = "gp2"
+      delete_on_termination = false
+    }
+  }
+
+  user_data = base64encode(<<-EOT
     #!/bin/bash
     yum update -y
     amazon-linux-extras install docker -y
@@ -96,14 +120,81 @@ resource "aws_instance" "data" {
       -e MYSQL_DATABASE=${var.mysql_database} \
       -p 3306:3306 \
       mysql:8 \
-      --default-authentication-plugin=mysql_native_password
+      --default-authentication-plugin=mysql_native_password [cite: 177]
   EOT
+  )
+}
+
+# --- INSTANCIAS (Implementación Lift & Shift) ---
+
+resource "aws_instance" "front" {
+  subnet_id = aws_subnet.pub.id [cite: 170]
+
+  launch_template {
+    id      = aws_launch_template.front_lt.id
+    version = "$Latest"
+  }
+
+  tags = {
+    Name = "ec2-front"
+    Role = "front"
+  }
+}
+
+resource "aws_instance" "back" {
+  subnet_id = aws_subnet.priv.id [cite: 174]
+
+  launch_template {
+    id      = aws_launch_template.back_lt.id
+    version = "$Latest"
+  }
+
+  tags = {
+    Name = "ec2-back"
+    Role = "back"
+  }
+}
+
+resource "aws_instance" "data" {
+  subnet_id = aws_subnet.priv.id
+
+  launch_template {
+    id      = aws_launch_template.data_lt.id
+    version = "$Latest"
+  }
 
   tags = {
     Name = "ec2-data"
     Role = "data"
   }
 }
+
+# --- ADMINISTRACIÓN Y SEGURIDAD (IE7, IE10) ---
+
+resource "aws_iam_role" "ec2_ssm_role" {
+  name = "innovatech-ssm-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" } [cite: 178]
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ssm_attach" {
+  role       = aws_iam_role.ec2_ssm_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_iam_instance_profile" "ec2_profile" {
+  name = "innovatech-ec2-profile"
+  role = aws_iam_role.ec2_ssm_role.name
+}
+
+# --- OUTPUTS ---
 
 output "front_public_ip" {
   value = aws_instance.front.public_ip
