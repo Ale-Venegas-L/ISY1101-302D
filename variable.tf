@@ -23,6 +23,11 @@ variable "key_name" {
   type        = string
 }
 
+variable "instance_profile_name" {
+  description = "Nombre de un perfil de instancia existente para EC2 (SSM/EC2)"
+  type        = string
+}
+
 variable "mysql_root_password" {
   description = "contraseña para MySQL"
   type        = string

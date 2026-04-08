@@ -1,5 +1,5 @@
 provider "aws" {
-  region = var.region [cite: 169]
+  region = var.region
 }
 
 # Data source para obtener la AMI más reciente de Amazon Linux 2
@@ -9,7 +9,7 @@ data "aws_ami" "amazon_linux_2" {
 
   filter {
     name   = "name"
-    values = ["amzn2-ami-hvm-*-x86_64-gp2"] [cite: 169]
+    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
   }
 }
 
@@ -23,10 +23,11 @@ resource "aws_launch_template" "front_lt" {
   key_name      = var.key_name
 
   iam_instance_profile {
-    name = aws_iam_instance_profile.ec2_profile.name [cite: 178]
+    name = var.instance_profile_name
   }
 
   network_interfaces {
+    subnet_id                   = aws_subnet.pub.id
     associate_public_ip_address = true
     security_groups             = [aws_security_group.pub_sg.id]
   }
@@ -38,14 +39,14 @@ resource "aws_launch_template" "front_lt" {
     systemctl enable --now docker
     usermod -a -G docker ec2-user
 
-    docker pull nginx:stable [cite: 171]
+    docker pull nginx:stable
     mkdir -p /etc/nginx/conf.d
 
     cat > /etc/nginx/conf.d/backend.conf <<NGINX
     server {
       listen 80;
       location / {
-        proxy_pass http://${aws_instance.back.private_ip}:8080; [cite: 172]
+        proxy_pass http://${aws_instance.back.private_ip}:8080;
       }
     }
     NGINX
@@ -63,10 +64,11 @@ resource "aws_launch_template" "back_lt" {
   key_name      = var.key_name
 
   iam_instance_profile {
-    name = aws_iam_instance_profile.ec2_profile.name [cite: 178]
+    name = var.instance_profile_name
   }
 
   network_interfaces {
+    subnet_id       = aws_subnet.priv.id
     security_groups = [aws_security_group.back_sg.id]
   }
 
@@ -77,7 +79,7 @@ resource "aws_launch_template" "back_lt" {
     systemctl enable --now docker
     usermod -a -G docker ec2-user
 
-    docker run -d --name app -p 8080:8080 hashicorp/http-echo -text="Hello from back service" [cite: 175]
+    docker run -d --name app -p 8080:8080 hashicorp/http-echo -text="Hello from back service" -listen=:8080
   EOT
   )
 }
@@ -90,19 +92,20 @@ resource "aws_launch_template" "data_lt" {
   key_name      = var.key_name
 
   iam_instance_profile {
-    name = aws_iam_instance_profile.ec2_profile.name [cite: 178]
+    name = var.instance_profile_name
   }
 
   network_interfaces {
+    subnet_id       = aws_subnet.priv.id
     security_groups = [aws_security_group.db_sg.id]
   }
 
-  # Configuración de bloque para persistencia de datos [cite: 88, 157]
+  # Configuración de bloque para persistencia de datos
   block_device_mappings {
     device_name = "/dev/sdb"
     ebs {
-      volume_size = 10
-      volume_type = "gp2"
+      volume_size           = 10
+      volume_type           = "gp2"
       delete_on_termination = false
     }
   }
@@ -120,7 +123,7 @@ resource "aws_launch_template" "data_lt" {
       -e MYSQL_DATABASE=${var.mysql_database} \
       -p 3306:3306 \
       mysql:8 \
-      --default-authentication-plugin=mysql_native_password [cite: 177]
+      --default-authentication-plugin=mysql_native_password
   EOT
   )
 }
@@ -128,8 +131,6 @@ resource "aws_launch_template" "data_lt" {
 # --- INSTANCIAS (Implementación Lift & Shift) ---
 
 resource "aws_instance" "front" {
-  subnet_id = aws_subnet.pub.id [cite: 170]
-
   launch_template {
     id      = aws_launch_template.front_lt.id
     version = "$Latest"
@@ -142,8 +143,6 @@ resource "aws_instance" "front" {
 }
 
 resource "aws_instance" "back" {
-  subnet_id = aws_subnet.priv.id [cite: 174]
-
   launch_template {
     id      = aws_launch_template.back_lt.id
     version = "$Latest"
@@ -156,8 +155,6 @@ resource "aws_instance" "back" {
 }
 
 resource "aws_instance" "data" {
-  subnet_id = aws_subnet.priv.id
-
   launch_template {
     id      = aws_launch_template.data_lt.id
     version = "$Latest"
@@ -171,28 +168,7 @@ resource "aws_instance" "data" {
 
 # --- ADMINISTRACIÓN Y SEGURIDAD (IE7, IE10) ---
 
-resource "aws_iam_role" "ec2_ssm_role" {
-  name = "innovatech-ssm-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Action = "sts:AssumeRole"
-      Effect = "Allow"
-      Principal = { Service = "ec2.amazonaws.com" } [cite: 178]
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "ssm_attach" {
-  role       = aws_iam_role.ec2_ssm_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
-resource "aws_iam_instance_profile" "ec2_profile" {
-  name = "innovatech-ec2-profile"
-  role = aws_iam_role.ec2_ssm_role.name
-}
+# Usar un perfil de instancia existente en lugar de crear rol/perfil IAM en Terraform.
 
 # --- OUTPUTS ---
 
